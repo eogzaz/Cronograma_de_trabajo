@@ -92,6 +92,11 @@ def get_clientes() -> pd.DataFrame:
         "Proxima_Obligacion": "proximo_vencimiento",
         "Responsable_Obligacion": "responsable_obligacion",
     })
+    # Si el Sheet todavía no tiene estas columnas (migración en curso), se
+    # crean vacías en vez de tumbar toda la app con un KeyError.
+    for col in ("responsabilidades", "responsable_obligacion"):
+        if col not in df.columns:
+            df[col] = ""
     df["fecha_vencimiento"] = df["Fecha_Vencimiento"].apply(_parse_fecha)
     return df.drop(columns=["Fecha_Vencimiento"])
 
