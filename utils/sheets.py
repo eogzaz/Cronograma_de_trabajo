@@ -90,15 +90,20 @@ def get_clientes() -> pd.DataFrame:
         "ID": "id", "Nombre": "nombre", "NIT": "nit",
         "Responsabilidades": "responsabilidades", "Estado": "estado",
         "Proxima_Obligacion": "proximo_vencimiento",
-        "Responsable_Obligacion": "responsable_obligacion",
     })
-    # Si el Sheet todavía no tiene estas columnas (migración en curso), se
-    # crean vacías en vez de tumbar toda la app con un KeyError.
-    for col in ("responsabilidades", "responsable_obligacion"):
-        if col not in df.columns:
-            df[col] = ""
+    # Si el Sheet todavía no tiene esta columna (migración en curso), se
+    # crea vacía en vez de tumbar toda la app con un KeyError.
+    if "responsabilidades" not in df.columns:
+        df["responsabilidades"] = ""
     df["fecha_vencimiento"] = df["Fecha_Vencimiento"].apply(_parse_fecha)
-    return df.drop(columns=["Fecha_Vencimiento"])
+    df = df.drop(columns=["Fecha_Vencimiento"])
+    # El responsable de la próxima obligación ya no se escribe a mano por
+    # cliente: se busca en Checklist_Plantillas según el Tipo (columna
+    # Responsable), así un solo cambio ahí actualiza a todos los clientes
+    # que tengan ese tipo como su próxima obligación.
+    mapa = _mapa_responsables_por_tipo()
+    df["responsable_obligacion"] = df["proximo_vencimiento"].map(mapa).fillna("")
+    return df
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +167,22 @@ def get_historial_tarea(tarea_id: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 # CHECKLISTS
 # ---------------------------------------------------------------------------
+@st.cache_data(ttl=300)
+def _mapa_responsables_por_tipo() -> dict:
+    """{Tipo: Responsable} leído de Checklist_Plantillas (columna Responsable),
+    cacheado para no repetir la consulta por cada cliente."""
+    df = _leer("Checklist_Plantillas")
+    if df.empty or "Responsable" not in df.columns:
+        return {}
+    mapa = {}
+    for _, r in df.iterrows():
+        tipo = str(r.get("Tipo", "")).strip()
+        resp = str(r.get("Responsable", "")).strip()
+        if tipo and resp and tipo not in mapa:
+            mapa[tipo] = resp
+    return mapa
+
+
 @st.cache_data(ttl=300)
 def get_checklist_template(tipo: str) -> list[str]:
     df = _leer("Checklist_Plantillas")
