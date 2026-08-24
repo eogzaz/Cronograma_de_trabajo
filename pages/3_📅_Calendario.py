@@ -31,7 +31,7 @@ else:
             c1, c2, c3 = st.columns([0.5, 3, 2])
             c1.markdown(f"### {icono}")
             c2.markdown(f"**{row['nombre']}** — {row['proximo_vencimiento']}")
-            c2.caption(f"Responsable: {row['responsable']}")
+            c2.caption(f"Responsable: {row['responsable_obligacion']}")
             c3.markdown(f"{row['fecha_vencimiento'].strftime('%d/%m/%Y')}")
             c3.caption(texto_dias)
 

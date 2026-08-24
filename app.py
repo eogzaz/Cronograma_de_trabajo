@@ -49,11 +49,11 @@ with col_izq:
     prox = clientes.sort_values("fecha_vencimiento").copy()
     prox["🔔"] = prox["fecha_vencimiento"].apply(estado_semaforo)
     st.dataframe(
-        prox[["🔔", "nombre", "responsable", "proximo_vencimiento", "fecha_vencimiento"]],
+        prox[["🔔", "nombre", "proximo_vencimiento", "responsable_obligacion", "fecha_vencimiento"]],
         column_config={
             "nombre": "Cliente",
-            "responsable": "Responsable",
             "proximo_vencimiento": "Obligación",
+            "responsable_obligacion": "Responsable",
             "fecha_vencimiento": st.column_config.DateColumn("Vence", format="DD/MM/YYYY"),
         },
         hide_index=True,

@@ -87,8 +87,10 @@ def get_clientes() -> pd.DataFrame:
     if df.empty:
         return df
     df = df.rename(columns={
-        "ID": "id", "Nombre": "nombre", "NIT": "nit", "Responsable": "responsable",
-        "Estado": "estado", "Proxima_Obligacion": "proximo_vencimiento",
+        "ID": "id", "Nombre": "nombre", "NIT": "nit",
+        "Responsabilidades": "responsabilidades", "Estado": "estado",
+        "Proxima_Obligacion": "proximo_vencimiento",
+        "Responsable_Obligacion": "responsable_obligacion",
     })
     df["fecha_vencimiento"] = df["Fecha_Vencimiento"].apply(_parse_fecha)
     return df.drop(columns=["Fecha_Vencimiento"])
@@ -204,7 +206,7 @@ def get_equipo() -> pd.DataFrame:
     clientes = get_clientes()
 
     equipo["clientes_asignados"] = equipo["nombre"].apply(
-        lambda n: (clientes["responsable"] == n).sum() if not clientes.empty else 0
+        lambda n: (clientes["responsable_obligacion"] == n).sum() if not clientes.empty else 0
     )
     equipo["tareas_activas"] = equipo["nombre"].apply(
         lambda n: ((tareas["responsable"] == n) & tareas["estado"].isin(["Pendiente", "En proceso"])).sum()

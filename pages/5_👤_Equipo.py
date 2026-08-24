@@ -30,8 +30,11 @@ c1, c2 = st.columns(2)
 with c1:
     st.markdown("**Clientes asignados**")
     st.dataframe(
-        clientes[clientes["responsable"] == persona][["nombre", "estado", "proximo_vencimiento"]],
-        column_config={"nombre": "Cliente", "estado": "Estado", "proximo_vencimiento": "Próxima obligación"},
+        clientes[clientes["responsable_obligacion"] == persona][["nombre", "responsabilidades", "estado", "proximo_vencimiento"]],
+        column_config={
+            "nombre": "Cliente", "responsabilidades": "Responsabilidades", "estado": "Estado",
+            "proximo_vencimiento": "Próxima obligación",
+        },
         hide_index=True, use_container_width=True,
     )
 

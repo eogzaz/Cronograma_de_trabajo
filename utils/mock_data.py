@@ -23,11 +23,11 @@ def _fecha(dias_desde_hoy: int) -> date:
 # ---------------------------------------------------------------------------
 def get_clientes() -> pd.DataFrame:
     data = [
-        {"id": 1, "nombre": "Empresa A S.A.S.", "nit": "900123456-1", "responsable": "Juan", "estado": "Activo", "proximo_vencimiento": "IVA julio", "fecha_vencimiento": _fecha(3)},
-        {"id": 2, "nombre": "Empresa B Ltda.", "nit": "800987654-2", "responsable": "María", "estado": "Activo", "proximo_vencimiento": "Renta", "fecha_vencimiento": _fecha(15)},
-        {"id": 3, "nombre": "Empresa C S.A.", "nit": "901222333-3", "responsable": "Carlos", "estado": "Activo", "proximo_vencimiento": "Nómina", "fecha_vencimiento": _fecha(-2)},
-        {"id": 4, "nombre": "Comercial D S.A.S.", "nit": "900555111-4", "responsable": "Juan", "estado": "Activo", "proximo_vencimiento": "Retención", "fecha_vencimiento": _fecha(7)},
-        {"id": 5, "nombre": "Distribuciones E", "nit": "800444222-5", "responsable": "María", "estado": "Inactivo", "proximo_vencimiento": "Exógena", "fecha_vencimiento": _fecha(30)},
+        {"id": 1, "nombre": "Empresa A S.A.S.", "nit": "900123456-1", "responsabilidades": "IVA mensual, Retención", "estado": "Activo", "proximo_vencimiento": "IVA julio", "responsable_obligacion": "Juan", "fecha_vencimiento": _fecha(3)},
+        {"id": 2, "nombre": "Empresa B Ltda.", "nit": "800987654-2", "responsabilidades": "Renta anual, Nómina", "estado": "Activo", "proximo_vencimiento": "Renta", "responsable_obligacion": "María", "fecha_vencimiento": _fecha(15)},
+        {"id": 3, "nombre": "Empresa C S.A.", "nit": "901222333-3", "responsabilidades": "Nómina quincenal", "estado": "Activo", "proximo_vencimiento": "Nómina", "responsable_obligacion": "Carlos", "fecha_vencimiento": _fecha(-2)},
+        {"id": 4, "nombre": "Comercial D S.A.S.", "nit": "900555111-4", "responsabilidades": "Retención, IVA mensual", "estado": "Activo", "proximo_vencimiento": "Retención", "responsable_obligacion": "Juan", "fecha_vencimiento": _fecha(7)},
+        {"id": 5, "nombre": "Distribuciones E", "nit": "800444222-5", "responsabilidades": "Exógena anual", "estado": "Inactivo", "proximo_vencimiento": "Exógena", "responsable_obligacion": "María", "fecha_vencimiento": _fecha(30)},
     ]
     return pd.DataFrame(data)
 
