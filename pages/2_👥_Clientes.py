@@ -1,3 +1,5 @@
+import re
+
 import streamlit as st
 from utils.sheets import get_clientes, get_tareas, estado_semaforo
 
@@ -37,7 +39,17 @@ tab_info, tab_oblig, tab_docs = st.tabs(["Información", "Obligaciones", "Docume
 with tab_info:
     c1, c2 = st.columns(2)
     c1.markdown(f"**NIT:** {info['nit']}")
-    c1.markdown(f"**Responsabilidades:** {info['responsabilidades']}")
+
+    c1.markdown("**Responsabilidades:**")
+    # Acepta tanto "IVA, Retención, Nómina" (comas) como varias líneas
+    # dentro de la misma celda (Alt+Enter en Sheets).
+    partes = [p.strip() for p in re.split(r"[,\n]", str(info["responsabilidades"])) if p.strip()]
+    if partes:
+        for p in partes:
+            c1.markdown(f"- {p}")
+    else:
+        c1.caption("Sin responsabilidades registradas.")
+
     c1.markdown(f"**Estado:** {info['estado']}")
     c2.markdown(f"**Próximo vencimiento:** {info['proximo_vencimiento']} ({info['fecha_vencimiento'].strftime('%d/%m/%Y')})")
     c2.markdown(f"**Responsable de esa obligación:** {info['responsable_obligacion']}")
