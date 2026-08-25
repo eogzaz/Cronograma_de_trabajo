@@ -8,7 +8,10 @@ clientes = get_clientes()
 
 col1, col2 = st.columns(2)
 with col1:
-    tipo = st.selectbox("Tipo de obligación", ["IVA", "Retención", "Renta", "Nómina"])
+    tipo = st.selectbox(
+        "Tipo de obligación",
+        ["IVA", "IVA Bimestral", "Retención en la fuente", "Retención ICA", "Renta", "Nómina"],
+    )
 with col2:
     cliente = st.selectbox("Cliente", clientes["nombre"])
 

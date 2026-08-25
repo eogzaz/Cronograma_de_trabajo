@@ -10,7 +10,8 @@ basta con cambiar el import:
 
 Lee y escribe directamente sobre el Google Sheet que sigue la estructura de
 Plantilla_Despacho_Contable.xlsx (pestañas: Clientes, Tareas, Equipo,
-Checklist_Plantillas, Checklist_Progreso, Historial_Tareas).
+Calendario_DIAN, Checklist_Plantillas, Checklist_Progreso, Historial_Tareas,
+Responsables_Obligacion).
 
 Requiere en .streamlit/secrets.toml (ver guía paso a paso):
 
@@ -102,18 +103,22 @@ def get_calendario_dian() -> pd.DataFrame:
 
 
 def _proxima_obligacion_nit(nit, calendario: pd.DataFrame):
-    """(fecha, tipo) de la próxima obligación de un NIT según Calendario_DIAN.
-    Si ya pasaron todas las fechas registradas, devuelve la más reciente en
-    vez de dejarlo en blanco. Si el NIT no aparece ahí, devuelve (None, None)."""
+    """(fecha, tipos) de la próxima obligación de un NIT según Calendario_DIAN.
+    `tipos` es una lista porque varias obligaciones distintas pueden vencer el
+    mismo día (ej. IVA + Retención en la fuente + Retención ICA). Si ya
+    pasaron todas las fechas registradas, devuelve la más reciente en vez de
+    dejarlo en blanco. Si el NIT no aparece ahí, devuelve (None, [])."""
     if calendario.empty:
-        return None, None
+        return None, []
     clave = _normalizar_nit(nit)
     sub = calendario[calendario["nit"].apply(_normalizar_nit) == clave].dropna(subset=["fecha"])
     if sub.empty:
-        return None, None
+        return None, []
     futuras = sub[sub["fecha"] >= HOY]
-    fila = futuras.sort_values("fecha").iloc[0] if not futuras.empty else sub.sort_values("fecha").iloc[-1]
-    return fila["fecha"], fila["tipo"]
+    origen = futuras if not futuras.empty else sub
+    fecha_obj = origen["fecha"].min() if not futuras.empty else origen["fecha"].max()
+    tipos = origen[origen["fecha"] == fecha_obj]["tipo"].tolist()
+    return fecha_obj, tipos
 
 
 # ---------------------------------------------------------------------------
@@ -146,22 +151,36 @@ def get_clientes() -> pd.DataFrame:
     # cruzado por NIT — así se calculan solas y no hay que escribirlas cliente
     # por cliente cada mes.
     calendario = get_calendario_dian()
-    fechas, tipos = [], []
+    fechas, tipos_por_cliente = [], []
     for i, nit in enumerate(df["nit"]):
-        fecha, tipo = _proxima_obligacion_nit(nit, calendario)
+        fecha, tipos = _proxima_obligacion_nit(nit, calendario)
         if fecha is None:
             fecha = fecha_manual.iloc[i] if fecha_manual is not None else None
-            tipo = df["proximo_vencimiento"].iloc[i] or ""
+            manual = str(df["proximo_vencimiento"].iloc[i] or "").strip()
+            tipos = [manual] if manual else []
         fechas.append(fecha)
-        tipos.append(tipo)
+        tipos_por_cliente.append(tipos)
     df["fecha_vencimiento"] = fechas
-    df["proximo_vencimiento"] = tipos
+    # Cuando varias obligaciones vencen el mismo día se muestran juntas,
+    # separadas por coma (ej. "IVA, Retención en la fuente, Retención ICA").
+    df["proximo_vencimiento"] = [", ".join(t) for t in tipos_por_cliente]
 
-    # El responsable de la próxima obligación se busca en Checklist_Plantillas
-    # según el Tipo (columna Responsable), así un solo cambio ahí actualiza a
-    # todos los clientes que tengan ese tipo como su próxima obligación.
+    # El responsable de cada obligación se busca en Checklist_Plantillas según
+    # el Tipo (columna Responsable), así un solo cambio ahí actualiza a todos
+    # los clientes que tengan ese tipo entre sus próximas obligaciones. Si las
+    # obligaciones del mismo día tienen responsables distintos, se listan
+    # todos (sin repetir).
     mapa = _mapa_responsables_por_tipo()
-    df["responsable_obligacion"] = df["proximo_vencimiento"].map(mapa).fillna("")
+
+    def _responsables(tipos):
+        vistos = []
+        for t in tipos:
+            r = mapa.get(t, "")
+            if r and r not in vistos:
+                vistos.append(r)
+        return ", ".join(vistos)
+
+    df["responsable_obligacion"] = [_responsables(t) for t in tipos_por_cliente]
     return df
 
 
@@ -228,9 +247,16 @@ def get_historial_tarea(tarea_id: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=300)
 def _mapa_responsables_por_tipo() -> dict:
-    """{Tipo: Responsable} leído de Checklist_Plantillas (columna Responsable),
-    cacheado para no repetir la consulta por cada cliente."""
-    df = _leer("Checklist_Plantillas")
+    """{Tipo: Responsable} leído de la pestaña Responsables_Obligacion.
+
+    Ojo: esto es distinto del Responsable que puede haber en cada fila de
+    Checklist_Plantillas — ese es quién hace CADA PASO del checklist (varias
+    personas por tipo, ej. quien ingresa la info no es quien la presenta).
+    Responsables_Obligacion en cambio tiene una sola fila por tipo, con la
+    persona "dueña"/responsable final de esa obligación (normalmente quien la
+    revisa o presenta) — es la que se muestra en Clientes/Equipo como
+    "Responsable de esa obligación"."""
+    df = _leer("Responsables_Obligacion")
     if df.empty or "Responsable" not in df.columns:
         return {}
     mapa = {}
