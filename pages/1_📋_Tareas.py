@@ -1,3 +1,5 @@
+from datetime import date
+
 import streamlit as st
 from utils.sheets import (
     get_tareas, get_clientes, get_equipo, get_historial_tarea,
@@ -67,16 +69,27 @@ with tab_tablero:
 # ---------------------------------------------------------------------------
 with tab_nueva:
     st.markdown("Asigna una nueva tarea a un miembro del equipo.")
+
+    # Fuera del formulario para que reaccione al instante al cambiar de cliente.
+    cliente = st.selectbox("Cliente", clientes["nombre"], key="nueva_tarea_cliente")
+    info_cliente = clientes[clientes["nombre"] == cliente].iloc[0]
+    fecha_sugerida = info_cliente["fecha_vencimiento"]
+    if fecha_sugerida:
+        st.caption(
+            f"📅 Próxima obligación de este cliente ({info_cliente['proximo_vencimiento']}): "
+            f"{fecha_sugerida.strftime('%d/%m/%Y')} — se usa como fecha límite sugerida abajo, "
+            f"la puedes cambiar si esta tarea es distinta."
+        )
+
     with st.form("form_nueva_tarea", clear_on_submit=True):
         titulo = st.text_input("✓ Descripción de la tarea", placeholder="Ej. Elaborar IVA julio")
         c1, c2 = st.columns(2)
         with c1:
             responsable = st.selectbox("Responsable", equipo["nombre"])
-            cliente = st.selectbox("Cliente", clientes["nombre"])
-        with c2:
-            fecha_limite = st.date_input("Fecha límite")
             prioridad = st.select_slider("Prioridad", options=["Baja", "Media", "Alta"], value="Media")
-        estado = st.selectbox("Estado inicial", ["Pendiente", "En proceso"])
+        with c2:
+            fecha_limite = st.date_input("Fecha límite", value=fecha_sugerida or date.today())
+            estado = st.selectbox("Estado inicial", ["Pendiente", "En proceso"])
 
         enviado = st.form_submit_button("Crear tarea", type="primary")
         if enviado:

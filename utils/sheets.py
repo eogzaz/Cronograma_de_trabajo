@@ -24,6 +24,7 @@ Y que la hoja esté compartida (como Editor) con el "client_email" de esa
 cuenta de servicio.
 """
 
+import re
 from datetime import date, datetime
 
 import gspread
@@ -78,6 +79,43 @@ def _parse_fecha(valor) -> date | None:
     return None
 
 
+def _normalizar_nit(nit) -> str:
+    """Quita puntos y espacios para poder cruzar NITs aunque estén escritos
+    con formato distinto en Clientes vs. Calendario_DIAN (ej. '902.063.943-2'
+    vs '902063943-2')."""
+    return re.sub(r"[.\s]", "", str(nit or "")).strip()
+
+
+# ---------------------------------------------------------------------------
+# CALENDARIO DIAN
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=300)
+def get_calendario_dian() -> pd.DataFrame:
+    """Una fila por (NIT, fecha, tipo de obligación), leída de la pestaña
+    Calendario_DIAN. Es la fuente real de los vencimientos de cada cliente."""
+    df = _leer("Calendario_DIAN")
+    if df.empty:
+        return df
+    df = df.rename(columns={"NIT": "nit", "Fecha": "fecha_raw", "Tipo_Obligacion": "tipo"})
+    df["fecha"] = df["fecha_raw"].apply(_parse_fecha)
+    return df.drop(columns=["fecha_raw"])
+
+
+def _proxima_obligacion_nit(nit, calendario: pd.DataFrame):
+    """(fecha, tipo) de la próxima obligación de un NIT según Calendario_DIAN.
+    Si ya pasaron todas las fechas registradas, devuelve la más reciente en
+    vez de dejarlo en blanco. Si el NIT no aparece ahí, devuelve (None, None)."""
+    if calendario.empty:
+        return None, None
+    clave = _normalizar_nit(nit)
+    sub = calendario[calendario["nit"].apply(_normalizar_nit) == clave].dropna(subset=["fecha"])
+    if sub.empty:
+        return None, None
+    futuras = sub[sub["fecha"] >= HOY]
+    fila = futuras.sort_values("fecha").iloc[0] if not futuras.empty else sub.sort_values("fecha").iloc[-1]
+    return fila["fecha"], fila["tipo"]
+
+
 # ---------------------------------------------------------------------------
 # CLIENTES
 # ---------------------------------------------------------------------------
@@ -95,12 +133,33 @@ def get_clientes() -> pd.DataFrame:
     # crea vacía en vez de tumbar toda la app con un KeyError.
     if "responsabilidades" not in df.columns:
         df["responsabilidades"] = ""
-    df["fecha_vencimiento"] = df["Fecha_Vencimiento"].apply(_parse_fecha)
-    df = df.drop(columns=["Fecha_Vencimiento"])
-    # El responsable de la próxima obligación ya no se escribe a mano por
-    # cliente: se busca en Checklist_Plantillas según el Tipo (columna
-    # Responsable), así un solo cambio ahí actualiza a todos los clientes
-    # que tengan ese tipo como su próxima obligación.
+
+    # Fecha/tipo escritos a mano en Clientes (si existen) solo se usan como
+    # respaldo cuando el NIT no aparece todavía en Calendario_DIAN.
+    fecha_manual = df["Fecha_Vencimiento"].apply(_parse_fecha) if "Fecha_Vencimiento" in df.columns else None
+    if "Fecha_Vencimiento" in df.columns:
+        df = df.drop(columns=["Fecha_Vencimiento"])
+    if "proximo_vencimiento" not in df.columns:
+        df["proximo_vencimiento"] = ""
+
+    # La fuente real de la fecha y el tipo de obligación es Calendario_DIAN,
+    # cruzado por NIT — así se calculan solas y no hay que escribirlas cliente
+    # por cliente cada mes.
+    calendario = get_calendario_dian()
+    fechas, tipos = [], []
+    for i, nit in enumerate(df["nit"]):
+        fecha, tipo = _proxima_obligacion_nit(nit, calendario)
+        if fecha is None:
+            fecha = fecha_manual.iloc[i] if fecha_manual is not None else None
+            tipo = df["proximo_vencimiento"].iloc[i] or ""
+        fechas.append(fecha)
+        tipos.append(tipo)
+    df["fecha_vencimiento"] = fechas
+    df["proximo_vencimiento"] = tipos
+
+    # El responsable de la próxima obligación se busca en Checklist_Plantillas
+    # según el Tipo (columna Responsable), así un solo cambio ahí actualiza a
+    # todos los clientes que tengan ese tipo como su próxima obligación.
     mapa = _mapa_responsables_por_tipo()
     df["responsable_obligacion"] = df["proximo_vencimiento"].map(mapa).fillna("")
     return df
