@@ -93,8 +93,13 @@ def _normalizar_nit(nit) -> str:
 @st.cache_data(ttl=300)
 def get_calendario_dian() -> pd.DataFrame:
     """Una fila por (NIT, fecha, tipo de obligación), leída de la pestaña
-    Calendario_DIAN. Es la fuente real de los vencimientos de cada cliente."""
-    df = _leer("Calendario_DIAN")
+    Calendario_DIAN. Es la fuente real de los vencimientos de cada cliente.
+    Si la pestaña todavía no existe, devuelve un DataFrame vacío en vez de
+    tumbar la app."""
+    try:
+        df = _leer("Calendario_DIAN")
+    except gspread.exceptions.WorksheetNotFound:
+        return pd.DataFrame()
     if df.empty:
         return df
     df = df.rename(columns={"NIT": "nit", "Fecha": "fecha_raw", "Tipo_Obligacion": "tipo"})
@@ -255,8 +260,15 @@ def _mapa_responsables_por_tipo() -> dict:
     Responsables_Obligacion en cambio tiene una sola fila por tipo, con la
     persona "dueña"/responsable final de esa obligación (normalmente quien la
     revisa o presenta) — es la que se muestra en Clientes/Equipo como
-    "Responsable de esa obligación"."""
-    df = _leer("Responsables_Obligacion")
+    "Responsable de esa obligación".
+
+    Esta pestaña es opcional: si todavía no existe en el Sheet, se devuelve
+    un mapa vacío en vez de tumbar la app (así el resto de la página sigue
+    funcionando mientras se termina de migrar)."""
+    try:
+        df = _leer("Responsables_Obligacion")
+    except gspread.exceptions.WorksheetNotFound:
+        return {}
     if df.empty or "Responsable" not in df.columns:
         return {}
     mapa = {}
