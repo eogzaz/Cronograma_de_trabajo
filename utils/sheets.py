@@ -362,7 +362,11 @@ def get_equipo() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # HELPERS DE ESTADO / COLOR (sin cambios frente a mock_data.py — no golpean la hoja)
 # ---------------------------------------------------------------------------
-def estado_semaforo(fecha_vencimiento: date) -> str:
+def estado_semaforo(fecha_vencimiento: date | None) -> str:
+    # Clientes sin ninguna fecha registrada en Calendario_DIAN (todavía no
+    # están ahí, o no tienen próxima obligación) no deben tumbar la app.
+    if not fecha_vencimiento:
+        return "⚪"
     dias = (fecha_vencimiento - HOY).days
     if dias < 0:
         return "🔴"

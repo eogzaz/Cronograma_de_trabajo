@@ -51,8 +51,14 @@ with tab_info:
         c1.caption("Sin responsabilidades registradas.")
 
     c1.markdown(f"**Estado:** {info['estado']}")
-    c2.markdown(f"**Próximo vencimiento:** {info['proximo_vencimiento']} ({info['fecha_vencimiento'].strftime('%d/%m/%Y')})")
-    c2.markdown(f"**Responsable de esa obligación:** {info['responsable_obligacion']}")
+    if info["fecha_vencimiento"]:
+        c2.markdown(
+            f"**Próximo vencimiento:** {info['proximo_vencimiento']} "
+            f"({info['fecha_vencimiento'].strftime('%d/%m/%Y')})"
+        )
+        c2.markdown(f"**Responsable de esa obligación:** {info['responsable_obligacion']}")
+    else:
+        c2.markdown("**Próximo vencimiento:** sin registrar (este NIT no aparece todavía en Calendario_DIAN)")
 
 with tab_oblig:
     tareas_cliente = tareas[tareas["cliente"] == cliente_sel]

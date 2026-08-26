@@ -16,9 +16,13 @@ elif vista == "Esta semana":
 else:
     limite = HOY + timedelta(days=30)
 
-en_rango = clientes[clientes["fecha_vencimiento"] <= limite].sort_values("fecha_vencimiento")
+con_fecha = clientes[clientes["fecha_vencimiento"].notna()]
+en_rango = con_fecha[con_fecha["fecha_vencimiento"] <= limite].sort_values("fecha_vencimiento")
+sin_fecha = len(clientes) - len(con_fecha)
 
 st.caption("🟢 Al día · 🟡 Próximo a vencer (≤5 días) · 🔴 Vencido")
+if sin_fecha:
+    st.caption(f"⚪ {sin_fecha} cliente(s) sin fecha registrada en Calendario_DIAN — no aparecen en esta lista.")
 
 if en_rango.empty:
     st.success("No hay vencimientos en este rango.")
