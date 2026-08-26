@@ -129,11 +129,20 @@ def _proxima_obligacion_nit(nit, calendario: pd.DataFrame):
 # ---------------------------------------------------------------------------
 # CLIENTES
 # ---------------------------------------------------------------------------
+COLUMNAS_CLIENTES = [
+    "nombre", "nit", "responsabilidades", "estado",
+    "proximo_vencimiento", "responsable_obligacion", "fecha_vencimiento",
+]
+
+
 @st.cache_data(ttl=30)
 def get_clientes() -> pd.DataFrame:
     df = _leer("Clientes")
     if df.empty:
-        return df
+        # Sin filas todavía (pestaña recién creada o vacía) — se devuelve con
+        # las columnas esperadas para que el resto de la app no truene con un
+        # KeyError al intentar leer clientes["nombre"], etc.
+        return pd.DataFrame(columns=COLUMNAS_CLIENTES)
     df = df.rename(columns={
         "ID": "id", "Nombre": "nombre", "NIT": "nit",
         "Responsabilidades": "responsabilidades", "Estado": "estado",
@@ -192,11 +201,16 @@ def get_clientes() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # TAREAS
 # ---------------------------------------------------------------------------
+COLUMNAS_TAREAS = ["id", "titulo", "cliente", "responsable", "estado", "prioridad", "fecha_limite"]
+
+
 @st.cache_data(ttl=30)
 def get_tareas() -> pd.DataFrame:
     df = _leer("Tareas")
     if df.empty:
-        return df
+        # Sin tareas todavía — devolver con las columnas esperadas en vez de
+        # un DataFrame totalmente vacío, para que tareas["estado"] no truene.
+        return pd.DataFrame(columns=COLUMNAS_TAREAS)
     df = df.rename(columns={
         "ID": "id", "Titulo": "titulo", "Cliente": "cliente", "Responsable": "responsable",
         "Estado": "estado", "Prioridad": "prioridad",
@@ -318,11 +332,14 @@ def set_checklist_item(cliente: str, tipo: str, paso: str, completado: bool) -> 
 # ---------------------------------------------------------------------------
 # EQUIPO
 # ---------------------------------------------------------------------------
+COLUMNAS_EQUIPO = ["nombre", "rol", "clientes_asignados", "tareas_activas", "tareas_vencidas"]
+
+
 @st.cache_data(ttl=30)
 def get_equipo() -> pd.DataFrame:
     equipo = _leer("Equipo")
     if equipo.empty:
-        return equipo
+        return pd.DataFrame(columns=COLUMNAS_EQUIPO)
     equipo = equipo.rename(columns={"Nombre": "nombre", "Rol": "rol"})
 
     tareas = get_tareas()

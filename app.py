@@ -86,4 +86,4 @@ st.dataframe(
     use_container_width=True,
 )
 
-st.info("💡 Este dashboard usa datos de ejemplo. El siguiente paso es conectar Supabase para que todo sea real y persistente.")
+st.caption("💡 Los datos de este dashboard se leen en vivo desde el Google Sheet del despacho.")
