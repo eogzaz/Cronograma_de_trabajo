@@ -80,7 +80,16 @@ def _sheet():
     return _client().open_by_key(st.secrets["GOOGLE_SHEET_ID"])
 
 
+@st.cache_resource
 def _ws(nombre: str):
+    """Se cachea como recurso (no solo los datos) porque .worksheet() hace
+    una llamada de METADATA a la API de Sheets cada vez que se invoca — sin
+    cachear, cada _leer()/escritura dispara esa llamada de más, y con varias
+    en un mismo rerun (ej. al generar tareas del calendario) se llega rápido
+    al límite de peticiones por minuto de Google y la app truena con un
+    gspread.exceptions.APIError. Cachear el objeto Worksheet no cachea sus
+    datos: cada .get_all_records()/.append_row()/etc. sobre él sigue yendo
+    a la API en el momento, solo se evita repetir la búsqueda de la pestaña."""
     return _sheet().worksheet(nombre)
 
 
@@ -412,6 +421,12 @@ def generar_tareas_desde_calendario(horizonte_dias: int = 30) -> dict:
     ids_existentes = [int(v) for v in ws.col_values(1)[1:] if str(v).strip().isdigit()]
     siguiente_id = max(ids_existentes, default=0) + 1
 
+    # Se trae el checklist de cada tipo UNA sola vez (no una vez por fila del
+    # calendario) — con 636 filas y varias decenas dentro del horizonte, sin
+    # esto se dispararían igual de llamadas repetidas a la API de Sheets.
+    tipos_en_rango = {t for t in proximas["tipo"] if t}
+    plantillas_por_tipo = {t: get_checklist_template_detallado(t) for t in tipos_en_rango}
+
     filas_nuevas = []
     clientes_tocados = set()
 
@@ -429,7 +444,7 @@ def generar_tareas_desde_calendario(horizonte_dias: int = 30) -> dict:
             resumen["obligaciones_omitidas"] += 1
             continue
 
-        pasos = get_checklist_template_detallado(tipo_nombre)
+        pasos = plantillas_por_tipo.get(tipo_nombre, [])
         if not pasos:
             continue  # todavía no hay checklist definido para este tipo
 
@@ -535,6 +550,7 @@ def get_checklist_template(tipo: str) -> list[str]:
     return sub["Paso"].tolist()
 
 
+@st.cache_data(ttl=300)
 def get_checklist_template_detallado(tipo: str) -> list[dict]:
     """Igual que get_checklist_template, pero además trae el responsable de
     CADA paso — lo usa generar_tareas_desde_calendario() para saber a quién
