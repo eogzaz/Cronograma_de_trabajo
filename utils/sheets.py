@@ -1,17 +1,40 @@
 """
 Capa de datos real (Google Sheets).
 
-Mismo contrato que utils/mock_data.py: mismas funciones, mismos nombres de
-columnas en los DataFrames devueltos. Para migrar una página de mock a real,
-basta con cambiar el import:
+Mismo contrato "de cara a las páginas" que utils/mock_data.py: las funciones
+devuelven DataFrames con columnas legibles (nombre, cliente, responsable...),
+aunque por dentro el Sheet ya funciona como una base de datos relacional real:
+cada tabla tiene una llave primaria (ID_*) y las relaciones entre tablas se
+hacen por esa llave, no por texto repetido. Para migrar una página de mock a
+real, basta con cambiar el import:
 
     from utils.mock_data import get_clientes, get_tareas   # antes
     from utils.sheets import get_clientes, get_tareas       # después
 
-Lee y escribe directamente sobre el Google Sheet que sigue la estructura de
-Plantilla_Despacho_Contable.xlsx (pestañas: Clientes, Tareas, Equipo,
-Calendario_DIAN, Checklist_Plantillas, Checklist_Progreso, Historial_Tareas,
-Responsables_Obligacion).
+Esquema del Google Sheet (llave primaria en negrita):
+
+    Clientes             **ID_Cliente**, Nombre, NIT, Responsabilidades,
+                         Software_Contable, Estado
+    Equipo               **ID_Equipo**, Nombre, Rol, Email
+    Tipos_Obligacion     **ID_Tipo**, Nombre
+    Tareas               **ID**, Titulo, ID_Cliente→Clientes,
+                         ID_Responsable→Equipo, Estado, Prioridad, Fecha_Limite,
+                         ID_Tipo→Tipos_Obligacion (vacío si la tarea se creó a
+                         mano en vez de generarse desde un checklist)
+    Checklist_Plantillas ID_Tipo→Tipos_Obligacion, Orden, Paso,
+                         ID_Responsable→Equipo   (llave compuesta ID_Tipo+Orden)
+    Responsables_Obligacion  ID_Tipo→Tipos_Obligacion (una fila por tipo),
+                         ID_Responsable→Equipo
+    Checklist_Progreso   ID_Cliente→Clientes, ID_Tipo→Tipos_Obligacion, Paso,
+                         Completado, Fecha_Actualizacion
+    Historial_Tareas     Tarea_ID→Tareas.ID, Fecha, Evento
+    Calendario_DIAN      NIT→Clientes.NIT (llave natural: así llega el
+                         calendario oficial de la DIAN), Fecha,
+                         ID_Tipo→Tipos_Obligacion
+
+Todas las funciones get_* resuelven esas llaves internamente y devuelven
+nombres legibles (cliente, responsable, tipo) — las páginas nunca ven un ID
+suelto, salvo donde se expone a propósito (ej. clientes["id"]).
 
 Requiere en .streamlit/secrets.toml (ver guía paso a paso):
 
@@ -26,7 +49,7 @@ cuenta de servicio.
 """
 
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import gspread
 import pandas as pd
@@ -87,6 +110,90 @@ def _normalizar_nit(nit) -> str:
     return re.sub(r"[.\s]", "", str(nit or "")).strip()
 
 
+def _id(valor) -> int | None:
+    """Convierte el valor de una celda ID_* a entero comparable. Google
+    Sheets puede devolver un mismo ID como int, float (1.0) o texto ("1")
+    según cómo esté formateada la celda — esto normaliza los tres casos.
+    Si la celda está vacía o no es un número, devuelve None."""
+    try:
+        return int(float(valor))
+    except (TypeError, ValueError):
+        return None
+
+
+# ---------------------------------------------------------------------------
+# MAPAS DE LLAVES (id <-> nombre) — leen la pestaña "cruda", sin pasar por
+# get_equipo()/get_clientes(), para no crear referencias circulares (esas dos
+# funciones a su vez usan estos mapas indirectamente a través de otras).
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=30)
+def _mapa_equipo_id_a_nombre() -> dict:
+    df = _leer("Equipo")
+    if df.empty or "ID_Equipo" not in df.columns:
+        return {}
+    return {_id(r["ID_Equipo"]): str(r["Nombre"]).strip() for _, r in df.iterrows() if _id(r["ID_Equipo"]) is not None}
+
+
+@st.cache_data(ttl=30)
+def _mapa_equipo_nombre_a_id() -> dict:
+    return {v: k for k, v in _mapa_equipo_id_a_nombre().items()}
+
+
+@st.cache_data(ttl=30)
+def _mapa_clientes_id_a_nombre() -> dict:
+    df = _leer("Clientes")
+    if df.empty or "ID_Cliente" not in df.columns:
+        return {}
+    return {_id(r["ID_Cliente"]): str(r["Nombre"]).strip() for _, r in df.iterrows() if _id(r["ID_Cliente"]) is not None}
+
+
+@st.cache_data(ttl=30)
+def _mapa_clientes_nombre_a_id() -> dict:
+    return {v: k for k, v in _mapa_clientes_id_a_nombre().items()}
+
+
+@st.cache_data(ttl=30)
+def _mapa_clientes_por_nit() -> dict:
+    """{NIT normalizado: (id_cliente, nombre)} — para poder generar tareas a
+    partir de una fila de Calendario_DIAN, que solo trae el NIT."""
+    df = _leer("Clientes")
+    if df.empty or "ID_Cliente" not in df.columns:
+        return {}
+    mapa = {}
+    for _, r in df.iterrows():
+        id_cliente = _id(r.get("ID_Cliente"))
+        nit_norm = _normalizar_nit(r.get("NIT"))
+        if id_cliente is not None and nit_norm:
+            mapa[nit_norm] = (id_cliente, str(r.get("Nombre", "")).strip())
+    return mapa
+
+
+@st.cache_data(ttl=300)
+def get_tipos_obligacion() -> pd.DataFrame:
+    """Catálogo de tipos de obligación (IVA, Retención en la fuente, ...).
+    Es la tabla "padre" que Checklist_Plantillas, Responsables_Obligacion,
+    Calendario_DIAN y Checklist_Progreso referencian por ID_Tipo en vez de
+    repetir el nombre como texto en cada una."""
+    try:
+        df = _leer("Tipos_Obligacion")
+    except gspread.exceptions.WorksheetNotFound:
+        return pd.DataFrame(columns=["id", "nombre"])
+    if df.empty:
+        return pd.DataFrame(columns=["id", "nombre"])
+    return df.rename(columns={"ID_Tipo": "id", "Nombre": "nombre"})
+
+
+@st.cache_data(ttl=300)
+def _tipos_id_a_nombre() -> dict:
+    df = get_tipos_obligacion()
+    return {_id(r["id"]): str(r["nombre"]).strip() for _, r in df.iterrows() if _id(r["id"]) is not None}
+
+
+@st.cache_data(ttl=300)
+def _tipos_nombre_a_id() -> dict:
+    return {v: k for k, v in _tipos_id_a_nombre().items()}
+
+
 # ---------------------------------------------------------------------------
 # CALENDARIO DIAN
 # ---------------------------------------------------------------------------
@@ -94,16 +201,20 @@ def _normalizar_nit(nit) -> str:
 def get_calendario_dian() -> pd.DataFrame:
     """Una fila por (NIT, fecha, tipo de obligación), leída de la pestaña
     Calendario_DIAN. Es la fuente real de los vencimientos de cada cliente.
-    Si la pestaña todavía no existe, devuelve un DataFrame vacío en vez de
-    tumbar la app."""
+    El cruce con Clientes se hace por NIT (llave natural — así llega el
+    calendario oficial de la DIAN), y el tipo de obligación se resuelve desde
+    Tipos_Obligacion a partir de ID_Tipo. Si la pestaña todavía no existe,
+    devuelve un DataFrame vacío en vez de tumbar la app."""
     try:
         df = _leer("Calendario_DIAN")
     except gspread.exceptions.WorksheetNotFound:
         return pd.DataFrame()
     if df.empty:
         return df
-    df = df.rename(columns={"NIT": "nit", "Fecha": "fecha_raw", "Tipo_Obligacion": "tipo"})
+    df = df.rename(columns={"NIT": "nit", "Fecha": "fecha_raw", "ID_Tipo": "id_tipo"})
     df["fecha"] = df["fecha_raw"].apply(_parse_fecha)
+    tipos = _tipos_id_a_nombre()
+    df["tipo"] = df["id_tipo"].apply(lambda v: tipos.get(_id(v), ""))
     return df.drop(columns=["fecha_raw"])
 
 
@@ -130,7 +241,7 @@ def _proxima_obligacion_nit(nit, calendario: pd.DataFrame):
 # CLIENTES
 # ---------------------------------------------------------------------------
 COLUMNAS_CLIENTES = [
-    "nombre", "nit", "responsabilidades", "estado",
+    "id", "nombre", "nit", "responsabilidades", "software_contable", "estado",
     "proximo_vencimiento", "responsable_obligacion", "fecha_vencimiento",
 ]
 
@@ -144,14 +255,15 @@ def get_clientes() -> pd.DataFrame:
         # KeyError al intentar leer clientes["nombre"], etc.
         return pd.DataFrame(columns=COLUMNAS_CLIENTES)
     df = df.rename(columns={
-        "ID": "id", "Nombre": "nombre", "NIT": "nit",
-        "Responsabilidades": "responsabilidades", "Estado": "estado",
-        "Proxima_Obligacion": "proximo_vencimiento",
+        "ID_Cliente": "id", "Nombre": "nombre", "NIT": "nit",
+        "Responsabilidades": "responsabilidades", "Software_Contable": "software_contable",
+        "Estado": "estado", "Proxima_Obligacion": "proximo_vencimiento",
     })
-    # Si el Sheet todavía no tiene esta columna (migración en curso), se
-    # crea vacía en vez de tumbar toda la app con un KeyError.
-    if "responsabilidades" not in df.columns:
-        df["responsabilidades"] = ""
+    # Si el Sheet todavía no tiene estas columnas (migración en curso), se
+    # crean vacías en vez de tumbar toda la app con un KeyError.
+    for col in ("responsabilidades", "software_contable"):
+        if col not in df.columns:
+            df[col] = ""
 
     # Fecha/tipo escritos a mano en Clientes (si existen) solo se usan como
     # respaldo cuando el NIT no aparece todavía en Calendario_DIAN.
@@ -179,11 +291,10 @@ def get_clientes() -> pd.DataFrame:
     # separadas por coma (ej. "IVA, Retención en la fuente, Retención ICA").
     df["proximo_vencimiento"] = [", ".join(t) for t in tipos_por_cliente]
 
-    # El responsable de cada obligación se busca en Checklist_Plantillas según
-    # el Tipo (columna Responsable), así un solo cambio ahí actualiza a todos
-    # los clientes que tengan ese tipo entre sus próximas obligaciones. Si las
-    # obligaciones del mismo día tienen responsables distintos, se listan
-    # todos (sin repetir).
+    # El responsable de cada obligación se busca en Responsables_Obligacion
+    # (por ID_Tipo), así un solo cambio ahí actualiza a todos los clientes que
+    # tengan ese tipo entre sus próximas obligaciones. Si las obligaciones del
+    # mismo día tienen responsables distintos, se listan todos (sin repetir).
     mapa = _mapa_responsables_por_tipo()
 
     def _responsables(tipos):
@@ -201,7 +312,7 @@ def get_clientes() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # TAREAS
 # ---------------------------------------------------------------------------
-COLUMNAS_TAREAS = ["id", "titulo", "cliente", "responsable", "estado", "prioridad", "fecha_limite"]
+COLUMNAS_TAREAS = ["id", "titulo", "cliente", "tipo", "responsable", "estado", "prioridad", "fecha_limite"]
 
 
 @st.cache_data(ttl=30)
@@ -212,23 +323,137 @@ def get_tareas() -> pd.DataFrame:
         # un DataFrame totalmente vacío, para que tareas["estado"] no truene.
         return pd.DataFrame(columns=COLUMNAS_TAREAS)
     df = df.rename(columns={
-        "ID": "id", "Titulo": "titulo", "Cliente": "cliente", "Responsable": "responsable",
-        "Estado": "estado", "Prioridad": "prioridad",
+        "ID": "id", "Titulo": "titulo", "ID_Cliente": "id_cliente",
+        "ID_Responsable": "id_responsable", "Estado": "estado", "Prioridad": "prioridad",
+        "ID_Tipo": "id_tipo",
     })
+    # Columna nueva (Tareas generadas desde el calendario) — si el Sheet
+    # todavía no la tiene, se crea vacía en vez de tumbar la app.
+    if "id_tipo" not in df.columns:
+        df["id_tipo"] = None
+
+    clientes_map = _mapa_clientes_id_a_nombre()
+    equipo_map = _mapa_equipo_id_a_nombre()
+    tipos_map = _tipos_id_a_nombre()
+    df["cliente"] = df["id_cliente"].apply(lambda v: clientes_map.get(_id(v), "(cliente no encontrado)"))
+    df["responsable"] = df["id_responsable"].apply(lambda v: equipo_map.get(_id(v), "(responsable no encontrado)"))
+    # Las tareas creadas a mano (no generadas desde un checklist) no tienen
+    # tipo — queda como cadena vacía en vez de "None".
+    df["tipo"] = df["id_tipo"].apply(lambda v: tipos_map.get(_id(v), ""))
     df["fecha_limite"] = df["Fecha_Limite"].apply(_parse_fecha)
     return df.drop(columns=["Fecha_Limite"])
 
 
 def crear_tarea(titulo: str, cliente: str, responsable: str, fecha_limite: date,
                  prioridad: str = "Media", estado: str = "Pendiente") -> None:
+    """Recibe cliente/responsable por NOMBRE (así los eligen en el
+    selectbox) y los guarda como ID_Cliente/ID_Responsable en la hoja —
+    la página no necesita saber que por dentro todo es relacional. Esta
+    función es para tareas sueltas creadas a mano, por eso no lleva tipo de
+    obligación (queda en blanco en la columna ID_Tipo)."""
     ws = _ws("Tareas")
     ids_existentes = [int(v) for v in ws.col_values(1)[1:] if str(v).strip().isdigit()]
     nuevo_id = max(ids_existentes, default=0) + 1
+    id_cliente = _mapa_clientes_nombre_a_id().get(cliente)
+    id_responsable = _mapa_equipo_nombre_a_id().get(responsable)
     ws.append_row([
-        nuevo_id, titulo, cliente, responsable, estado, prioridad,
-        fecha_limite.strftime("%d/%m/%Y"),
+        nuevo_id, titulo, id_cliente, id_responsable, estado, prioridad,
+        fecha_limite.strftime("%d/%m/%Y"), "",
     ])
     get_tareas.clear()
+
+
+def generar_tareas_desde_calendario(horizonte_dias: int = 30) -> dict:
+    """Convierte cada obligación próxima de Calendario_DIAN (cliente + tipo +
+    fecha) en tareas reales: una por cada paso del checklist de ese tipo
+    (Checklist_Plantillas), asignada al responsable de ese paso, con
+    Fecha_Limite = la fecha de la obligación.
+
+    Es la manera de que "las tareas sean los pasos del checklist, generadas
+    según el calendario" en vez de crearse una por una a mano. Se puede
+    correr las veces que sea: si una obligación (mismo cliente + tipo +
+    fecha) ya tiene tareas generadas, se omite — no duplica.
+
+    Devuelve un resumen: {"tareas_creadas", "obligaciones_generadas",
+    "obligaciones_omitidas", "clientes"}."""
+    resumen = {"tareas_creadas": 0, "obligaciones_generadas": 0, "obligaciones_omitidas": 0, "clientes": 0}
+
+    calendario = get_calendario_dian()
+    if calendario.empty:
+        return resumen
+
+    limite = HOY + timedelta(days=horizonte_dias)
+    proximas = calendario.dropna(subset=["fecha"])
+    proximas = proximas[(proximas["fecha"] >= HOY) & (proximas["fecha"] <= limite)]
+    if proximas.empty:
+        return resumen
+
+    clientes_por_nit = _mapa_clientes_por_nit()
+    equipo_nombre_a_id = _mapa_equipo_nombre_a_id()
+    tareas_existentes = _leer("Tareas")
+    tiene_columnas_ids = (
+        not tareas_existentes.empty
+        and "ID_Cliente" in tareas_existentes.columns
+        and "ID_Tipo" in tareas_existentes.columns
+        and "Fecha_Limite" in tareas_existentes.columns
+    )
+
+    def _ya_generada(id_cliente, id_tipo, fecha_str) -> bool:
+        if not tiene_columnas_ids:
+            return False
+        coincide = (
+            (tareas_existentes["ID_Cliente"].apply(_id) == id_cliente)
+            & (tareas_existentes["ID_Tipo"].apply(_id) == id_tipo)
+            & (tareas_existentes["Fecha_Limite"].astype(str).str.strip() == fecha_str)
+        )
+        return bool(coincide.any())
+
+    ws = _ws("Tareas")
+    ids_existentes = [int(v) for v in ws.col_values(1)[1:] if str(v).strip().isdigit()]
+    siguiente_id = max(ids_existentes, default=0) + 1
+
+    filas_nuevas = []
+    clientes_tocados = set()
+
+    for _, fila in proximas.iterrows():
+        info_cliente = clientes_por_nit.get(_normalizar_nit(fila["nit"]))
+        if not info_cliente:
+            continue  # NIT del calendario que todavía no tiene cliente registrado
+        id_cliente, _nombre_cliente = info_cliente
+        id_tipo = _id(fila.get("id_tipo"))
+        tipo_nombre = fila.get("tipo", "")
+        fecha_obj = fila["fecha"]
+        fecha_str = fecha_obj.strftime("%d/%m/%Y")
+
+        if _ya_generada(id_cliente, id_tipo, fecha_str):
+            resumen["obligaciones_omitidas"] += 1
+            continue
+
+        pasos = get_checklist_template_detallado(tipo_nombre)
+        if not pasos:
+            continue  # todavía no hay checklist definido para este tipo
+
+        dias_para_vencer = (fecha_obj - HOY).days
+        prioridad = "Alta" if dias_para_vencer <= 5 else "Media" if dias_para_vencer <= 15 else "Baja"
+
+        for paso in pasos:
+            id_responsable = equipo_nombre_a_id.get(paso["responsable"])
+            filas_nuevas.append([
+                siguiente_id, paso["paso"], id_cliente, id_responsable,
+                "Pendiente", prioridad, fecha_str, id_tipo,
+            ])
+            siguiente_id += 1
+
+        resumen["obligaciones_generadas"] += 1
+        clientes_tocados.add(id_cliente)
+
+    if filas_nuevas:
+        ws.append_rows(filas_nuevas)
+        get_tareas.clear()
+
+    resumen["tareas_creadas"] = len(filas_nuevas)
+    resumen["clientes"] = len(clientes_tocados)
+    return resumen
 
 
 def actualizar_estado_tarea(tarea_id: int, nuevo_estado: str) -> None:
@@ -266,7 +491,9 @@ def get_historial_tarea(tarea_id: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=300)
 def _mapa_responsables_por_tipo() -> dict:
-    """{Tipo: Responsable} leído de la pestaña Responsables_Obligacion.
+    """{nombre del tipo: nombre del responsable}, resuelto desde
+    Responsables_Obligacion (que guarda ID_Tipo + ID_Responsable) contra los
+    catálogos Tipos_Obligacion y Equipo.
 
     Ojo: esto es distinto del Responsable que puede haber en cada fila de
     Checklist_Plantillas — ese es quién hace CADA PASO del checklist (varias
@@ -283,32 +510,56 @@ def _mapa_responsables_por_tipo() -> dict:
         df = _leer("Responsables_Obligacion")
     except gspread.exceptions.WorksheetNotFound:
         return {}
-    if df.empty or "Responsable" not in df.columns:
+    if df.empty:
         return {}
+    tipos = _tipos_id_a_nombre()
+    equipo = _mapa_equipo_id_a_nombre()
     mapa = {}
     for _, r in df.iterrows():
-        tipo = str(r.get("Tipo", "")).strip()
-        resp = str(r.get("Responsable", "")).strip()
-        if tipo and resp and tipo not in mapa:
-            mapa[tipo] = resp
+        tipo_nombre = tipos.get(_id(r.get("ID_Tipo")))
+        resp_nombre = equipo.get(_id(r.get("ID_Responsable")))
+        if tipo_nombre and resp_nombre and tipo_nombre not in mapa:
+            mapa[tipo_nombre] = resp_nombre
     return mapa
 
 
 @st.cache_data(ttl=300)
 def get_checklist_template(tipo: str) -> list[str]:
+    """Recibe el NOMBRE del tipo (el que se ve en el selectbox) y lo resuelve
+    a ID_Tipo para filtrar Checklist_Plantillas."""
     df = _leer("Checklist_Plantillas")
     if df.empty:
         return []
-    sub = df[df["Tipo"] == tipo].sort_values("Orden")
+    id_tipo = _tipos_nombre_a_id().get(tipo)
+    sub = df[df["ID_Tipo"].apply(_id) == id_tipo].sort_values("Orden")
     return sub["Paso"].tolist()
 
 
+def get_checklist_template_detallado(tipo: str) -> list[dict]:
+    """Igual que get_checklist_template, pero además trae el responsable de
+    CADA paso — lo usa generar_tareas_desde_calendario() para saber a quién
+    asignarle cada tarea."""
+    df = _leer("Checklist_Plantillas")
+    if df.empty:
+        return []
+    id_tipo = _tipos_nombre_a_id().get(tipo)
+    sub = df[df["ID_Tipo"].apply(_id) == id_tipo].sort_values("Orden")
+    equipo = _mapa_equipo_id_a_nombre()
+    return [
+        {"paso": r["Paso"], "responsable": equipo.get(_id(r.get("ID_Responsable")), "")}
+        for _, r in sub.iterrows()
+    ]
+
+
 def get_checklist_progreso(cliente: str, tipo: str) -> dict[str, bool]:
-    """Devuelve {paso: completado} para pintar los checkboxes ya marcados."""
+    """Devuelve {paso: completado} para pintar los checkboxes ya marcados.
+    cliente/tipo llegan por nombre y se resuelven a ID_Cliente/ID_Tipo."""
     df = _leer("Checklist_Progreso")
     if df.empty:
         return {}
-    sub = df[(df["Cliente"] == cliente) & (df["Tipo"] == tipo)]
+    id_cliente = _mapa_clientes_nombre_a_id().get(cliente)
+    id_tipo = _tipos_nombre_a_id().get(tipo)
+    sub = df[(df["ID_Cliente"].apply(_id) == id_cliente) & (df["ID_Tipo"].apply(_id) == id_tipo)]
     return {
         r["Paso"]: str(r["Completado"]).strip().upper() == "TRUE"
         for _, r in sub.iterrows()
@@ -318,21 +569,23 @@ def get_checklist_progreso(cliente: str, tipo: str) -> dict[str, bool]:
 def set_checklist_item(cliente: str, tipo: str, paso: str, completado: bool) -> None:
     ws = _ws("Checklist_Progreso")
     registros = ws.get_all_records()
+    id_cliente = _mapa_clientes_nombre_a_id().get(cliente)
+    id_tipo = _tipos_nombre_a_id().get(tipo)
     valor = "TRUE" if completado else "FALSE"
     fecha = HOY.strftime("%d/%m/%Y")
 
     for i, r in enumerate(registros, start=2):  # fila 1 = encabezados
-        if r["Cliente"] == cliente and r["Tipo"] == tipo and r["Paso"] == paso:
+        if _id(r.get("ID_Cliente")) == id_cliente and _id(r.get("ID_Tipo")) == id_tipo and r.get("Paso") == paso:
             ws.update(f"D{i}:E{i}", [[valor, fecha]])
             return
 
-    ws.append_row([cliente, tipo, paso, valor, fecha])
+    ws.append_row([id_cliente, id_tipo, paso, valor, fecha])
 
 
 # ---------------------------------------------------------------------------
 # EQUIPO
 # ---------------------------------------------------------------------------
-COLUMNAS_EQUIPO = ["nombre", "rol", "clientes_asignados", "tareas_activas", "tareas_vencidas"]
+COLUMNAS_EQUIPO = ["id", "nombre", "rol", "clientes_asignados", "tareas_activas", "tareas_vencidas"]
 
 
 @st.cache_data(ttl=30)
@@ -340,7 +593,7 @@ def get_equipo() -> pd.DataFrame:
     equipo = _leer("Equipo")
     if equipo.empty:
         return pd.DataFrame(columns=COLUMNAS_EQUIPO)
-    equipo = equipo.rename(columns={"Nombre": "nombre", "Rol": "rol"})
+    equipo = equipo.rename(columns={"ID_Equipo": "id", "Nombre": "nombre", "Rol": "rol"})
 
     tareas = get_tareas()
     clientes = get_clientes()

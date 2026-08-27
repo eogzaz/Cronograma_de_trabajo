@@ -3,7 +3,7 @@ from datetime import date
 import streamlit as st
 from utils.sheets import (
     get_tareas, get_clientes, get_equipo, get_historial_tarea,
-    crear_tarea, actualizar_estado_tarea,
+    crear_tarea, actualizar_estado_tarea, generar_tareas_desde_calendario,
 )
 
 st.set_page_config(page_title="Tareas", page_icon="📋", layout="wide")
@@ -15,7 +15,9 @@ equipo = get_equipo()
 
 ESTADOS = ["Pendiente", "En proceso", "Finalizada", "Vencida"]
 
-tab_tablero, tab_nueva, tab_historial = st.tabs(["Tablero", "➕ Nueva tarea", "🕒 Historial"])
+tab_tablero, tab_generar, tab_nueva, tab_historial = st.tabs(
+    ["Tablero", "🔄 Generar del calendario", "➕ Nueva tarea", "🕒 Historial"]
+)
 
 
 def _tarjeta_tarea(t):
@@ -23,7 +25,8 @@ def _tarjeta_tarea(t):
     prioridad_icono = {"Alta": "🔴", "Media": "🟡", "Baja": "🟢"}.get(t["prioridad"], "⚪")
     with st.container(border=True):
         st.markdown(f"**{t['titulo']}**")
-        st.caption(f"{t['cliente']} · {t['responsable']}")
+        subtitulo = t["cliente"] + (f" · {t['tipo']}" if t["tipo"] else "") + f" · {t['responsable']}"
+        st.caption(subtitulo)
         st.caption(f"{prioridad_icono} Prioridad {t['prioridad']} · vence {t['fecha_limite'].strftime('%d/%m')}")
         try:
             indice_actual = ESTADOS.index(t["estado"])
@@ -63,6 +66,36 @@ with tab_tablero:
         st.markdown("**🔴 Vencidas**")
         for _, t in vencidas.iterrows():
             _tarjeta_tarea(t)
+
+# ---------------------------------------------------------------------------
+# GENERAR TAREAS DESDE EL CALENDARIO
+# ---------------------------------------------------------------------------
+with tab_generar:
+    st.markdown(
+        "Convierte cada obligación próxima de **Calendario_DIAN** en tareas reales: "
+        "una por cada paso del checklist de ese tipo (Checklist_Plantillas), asignada "
+        "a quien le corresponde ese paso, con la fecha de la obligación como fecha límite."
+    )
+    horizonte = st.selectbox(
+        "Generar para las obligaciones que vencen en los próximos...",
+        [15, 30, 45, 60], index=1, format_func=lambda d: f"{d} días",
+    )
+    if st.button("🔄 Generar tareas pendientes", type="primary"):
+        resumen = generar_tareas_desde_calendario(horizonte_dias=horizonte)
+        if resumen["tareas_creadas"] == 0 and resumen["obligaciones_omitidas"] == 0:
+            st.info("No hay obligaciones en ese rango de fechas todavía (o falta el checklist de ese tipo).")
+        else:
+            st.success(
+                f"✅ Se crearon {resumen['tareas_creadas']} tareas para "
+                f"{resumen['obligaciones_generadas']} obligación(es) de {resumen['clientes']} cliente(s)."
+                + (f" {resumen['obligaciones_omitidas']} obligación(es) ya tenían tareas generadas y se omitieron."
+                   if resumen["obligaciones_omitidas"] else "")
+            )
+            st.rerun()
+    st.caption(
+        "💡 Se puede correr las veces que sea: si una obligación (mismo cliente + tipo + fecha) "
+        "ya tiene tareas generadas, se omite — no se duplica."
+    )
 
 # ---------------------------------------------------------------------------
 # NUEVA TAREA
@@ -111,8 +144,18 @@ with tab_nueva:
 # HISTORIAL DE UNA TAREA
 # ---------------------------------------------------------------------------
 with tab_historial:
-    tarea_sel = st.selectbox("Selecciona una tarea", tareas["titulo"])
-    tarea_id = tareas[tareas["titulo"] == tarea_sel]["id"].iloc[0]
+    if tareas.empty:
+        st.caption("Todavía no hay tareas creadas.")
+        st.stop()
+    # Se identifica por ID (no por título): con tareas generadas desde
+    # checklists es normal que varias compartan el mismo título (ej.
+    # "Presentar") para clientes distintos.
+    tarea_id = st.selectbox(
+        "Selecciona una tarea", tareas["id"],
+        format_func=lambda i: (lambda t: f"{t['titulo']} — {t['cliente']} ({t['fecha_limite'].strftime('%d/%m/%Y')})")(
+            tareas[tareas["id"] == i].iloc[0]
+        ),
+    )
     historial = get_historial_tarea(tarea_id)
 
     for evento in historial:

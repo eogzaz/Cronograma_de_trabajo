@@ -1,17 +1,23 @@
 import streamlit as st
-from utils.sheets import get_checklist_template, get_clientes, get_checklist_progreso, set_checklist_item
+from utils.sheets import (
+    get_checklist_template, get_clientes, get_checklist_progreso,
+    set_checklist_item, get_tipos_obligacion,
+)
 
 st.set_page_config(page_title="Checklists", page_icon="✅", layout="wide")
 st.title("✅ Checklists")
 
 clientes = get_clientes()
+tipos = get_tipos_obligacion()
+
+if tipos.empty:
+    st.warning("Todavía no existe la pestaña **Tipos_Obligacion** en el Google Sheet (o está vacía). "
+               "Créala con columnas ID_Tipo y Nombre para poder armar checklists.")
+    st.stop()
 
 col1, col2 = st.columns(2)
 with col1:
-    tipo = st.selectbox(
-        "Tipo de obligación",
-        ["IVA", "IVA Bimestral", "Retención en la fuente", "Retención ICA", "Renta", "Nómina"],
-    )
+    tipo = st.selectbox("Tipo de obligación", tipos["nombre"])
 with col2:
     cliente = st.selectbox("Cliente", clientes["nombre"])
 

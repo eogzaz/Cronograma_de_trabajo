@@ -19,9 +19,10 @@ st.subheader("Listado general")
 tabla = vista.copy()
 tabla["🔔"] = tabla["fecha_vencimiento"].apply(estado_semaforo)
 st.dataframe(
-    tabla[["🔔", "nombre", "nit", "responsabilidades", "estado", "proximo_vencimiento", "responsable_obligacion", "fecha_vencimiento"]],
+    tabla[["🔔", "id", "nombre", "nit", "responsabilidades", "software_contable", "estado", "proximo_vencimiento", "responsable_obligacion", "fecha_vencimiento"]],
     column_config={
-        "nombre": "Cliente", "nit": "NIT", "responsabilidades": "Responsabilidades", "estado": "Estado",
+        "id": "ID", "nombre": "Cliente", "nit": "NIT", "responsabilidades": "Responsabilidades",
+        "software_contable": "Software contable", "estado": "Estado",
         "proximo_vencimiento": "Próxima obligación",
         "responsable_obligacion": "Responsable de esa obligación",
         "fecha_vencimiento": st.column_config.DateColumn("Vence", format="DD/MM/YYYY"),
@@ -38,7 +39,9 @@ tab_info, tab_oblig, tab_docs = st.tabs(["Información", "Obligaciones", "Docume
 
 with tab_info:
     c1, c2 = st.columns(2)
+    c1.markdown(f"**ID:** {info['id']}")
     c1.markdown(f"**NIT:** {info['nit']}")
+    c1.markdown(f"**Software contable:** {info['software_contable'] or 'No registrado'}")
 
     c1.markdown("**Responsabilidades:**")
     # Acepta tanto "IVA, Retención, Nómina" (comas) como varias líneas
@@ -66,9 +69,10 @@ with tab_oblig:
         st.caption("Sin tareas registradas para este cliente.")
     else:
         st.dataframe(
-            tareas_cliente[["titulo", "responsable", "estado", "prioridad", "fecha_limite"]],
+            tareas_cliente[["titulo", "tipo", "responsable", "estado", "prioridad", "fecha_limite"]],
             column_config={
-                "titulo": "Tarea", "responsable": "Responsable", "estado": "Estado", "prioridad": "Prioridad",
+                "titulo": "Tarea", "tipo": "Obligación", "responsable": "Responsable",
+                "estado": "Estado", "prioridad": "Prioridad",
                 "fecha_limite": st.column_config.DateColumn("Fecha límite", format="DD/MM/YYYY"),
             },
             hide_index=True, use_container_width=True,
